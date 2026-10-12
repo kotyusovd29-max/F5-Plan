@@ -58,7 +58,7 @@ class ProjectAiTest extends TestCase
                                     'companies' => [],
                                 ],
                                 'integrations' => [
-                                    ['name' => 'WhatsApp', 'comment' => 'Переписка с клиентами'],
+                                    ['widget_slug' => 'chatter', 'comment' => 'Переписка с клиентами в мессенджерах'],
                                 ],
                                 'funnels' => [
                                     [
@@ -121,7 +121,8 @@ class ProjectAiTest extends TestCase
 
         $this->assertDatabaseHas('project_integrations', [
             'project_id' => $project->id,
-            'name' => 'WhatsApp',
+            'widget_slug' => 'chatter',
+            'name' => 'Chatter',
         ]);
 
         $funnel = Funnel::query()->where('project_id', $project->id)->first();

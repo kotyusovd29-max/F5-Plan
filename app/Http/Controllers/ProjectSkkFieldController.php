@@ -25,7 +25,8 @@ class ProjectSkkFieldController extends Controller
             ->max('sort_order') ?? 0) + 1;
 
         $field = $project->skkFields()->create([
-            ...$request->safe()->only(['entity_type', 'name', 'comment']),
+            ...ProjectSkkField::normalizeAttributes($request->validated()),
+            'entity_type' => $entityType,
             'sort_order' => $sortOrder,
         ]);
 
@@ -45,7 +46,7 @@ class ProjectSkkFieldController extends Controller
     ): RedirectResponse|JsonResponse {
         abort_unless($skkField->project_id === $project->id, 404);
 
-        $skkField->update($request->validated());
+        $skkField->update(ProjectSkkField::normalizeAttributes($request->validated()));
 
         return $this->respondForCanvas(
             $request,

@@ -4,6 +4,8 @@ namespace App\Services;
 
 use App\Models\Project;
 use App\Models\ProjectSkkField;
+use App\Support\F5AiModels;
+use App\Support\F5WidgetCatalog;
 
 class ProjectAiImplementationService
 {
@@ -19,8 +21,12 @@ class ProjectAiImplementationService
             return true;
         }
 
+        if (mb_strlen($message) < 300) {
+            return false;
+        }
+
         return (bool) preg_match(
-            '/(amocrm|amo\s*crm|внедрени|кейс|воронк|сквозн|автоматизац|интеграц)/ui',
+            '/(кейс\s+внедрен|полн(ый|ое)\s+(кейс|план)|опиши\s+внедрен|подготовь\s+(кейс|план)|техническое\s+задание|детальн(ый|ое)\s+(кейс|план))/ui',
             $message
         );
     }
@@ -28,10 +34,10 @@ class ProjectAiImplementationService
     /**
      * @return array{report: string, changes: array<string, mixed>|null}
      */
-    public function process(Project $project, string $message): array
+    public function process(Project $project, string $message, ?int $preferredUserId = null): array
     {
-        $report = $this->generateReport($message);
-        $changes = $this->extractChanges($project, $message, $report);
+        $report = $this->generateReport($project, $message, $preferredUserId);
+        $changes = $this->extractChanges($project, $message, $report, $preferredUserId);
 
         return [
             'report' => $report,
@@ -39,7 +45,7 @@ class ProjectAiImplementationService
         ];
     }
 
-    private function generateReport(string $message): string
+    private function generateReport(Project $project, string $message, ?int $preferredUserId = null): string
     {
         $systemPrompt = <<<'PROMPT'
 Ты — CRM-интегратор с опытом внедрения amoCRM. Подготовь подробный практический кейс внедрения по запросу клиента.
@@ -58,7 +64,8 @@ PROMPT;
             ['role' => 'system', 'content' => $systemPrompt],
             ['role' => 'user', 'content' => $message],
         ], [
-            'model' => config('f5ai.model_large'),
+            'user' => F5AiModels::resolveUser($project, $preferredUserId),
+            'large' => true,
             'max_tokens' => (int) config('f5ai.max_tokens_report', 16000),
             'temperature' => 0.5,
         ]);
@@ -67,30 +74,34 @@ PROMPT;
     /**
      * @return array<string, mixed>|null
      */
-    private function extractChanges(Project $project, string $message, string $report): ?array
-    {
+    private function extractChanges(
+        Project $project,
+        string $message,
+        string $report,
+        ?int $preferredUserId = null
+    ): ?array {
         $context = $this->contextBuilder->build($project);
         $contextJson = json_encode($context, JSON_UNESCAPED_UNICODE);
-        $reportExcerpt = mb_substr($report, 0, 14000);
+        $widgetRules = F5WidgetCatalog::integrationPromptRules();
 
         $systemPrompt = <<<PROMPT
 Ты — CRM-архитектор. По запросу клиента и подготовленному кейсу сформируй изменения для проекта в CRM-планировщике.
 
-Текущее состояние проекта (id для update/delete):
+Текущее состояние проекта (id для update/delete; f5_widgets — каталог виджетов команды F5):
 {$contextJson}
 
 Ответь ТОЛЬКО валидным JSON без markdown:
 {
   "message": "Краткое резюме: что будет загружено в проект",
   "changes": {
-    "project": { "fields": { "company_name": "...", "employees_count": null, "client_tasks": "краткое резюме задач" } },
+    "project": { "fields": { "company_name": "...", "business_sphere": "...", "employees_count": null, "client_tasks": "краткое резюме задач" } },
     "skk_fields": {
-      "create": [{"entity_type": "deals|contacts|companies", "name": "...", "comment": "тип поля и зачем"}],
+      "create": [{"entity_type": "deals|contacts|companies", "name": "...", "value_type": "text|number|date|select|multiselect|toggle", "is_required": true, "show_in_card": true, "show_in_list": false, "show_in_filter": false, "options": ["Вариант 1"], "funnel_stage_id": null, "comment": "зачем нужно поле"}],
       "update": [],
       "delete": []
     },
     "integrations": {
-      "create": [{"name": "...", "comment": "какую проблему решает и сценарий"}],
+      "create": [{"widget_slug": "chatter", "comment": "какую проблему решает и сценарий"}],
       "update": [],
       "delete": []
     },
@@ -99,7 +110,7 @@ PROMPT;
         "name": "Название воронки",
         "description": "Цель воронки",
         "stages": [
-          {"name": "Этап", "action": "Что делает менеджер", "comment": "Триггер перехода / SLA"}
+          {"name": "Этап", "action": "Автозадача менеджеру", "comment": "Триггер перехода", "stage_type": "Тип этапа", "deadline": "SLA", "kind": "normal", "widgets": [], "outcomes": [{"result": "Успех", "mode": "move", "target_sort_order": 2}]}
         ]
       }],
       "update": [],
@@ -109,22 +120,25 @@ PROMPT;
   }
 }
 
+{$widgetRules}
+
 Правила:
-- Заполни проект по кейсу: минимум 8–12 полей (deals+contacts+companies), 2–4 воронки с детальными этапами, 5–10 интеграций/виджетов.
+- Заполни проект по кейсу: минимум 8–12 полей (deals+contacts+companies), 2–4 воронки с детальными этапами, 5–10 интеграций/виджетов в разделе integrations.
+- Автозадачи и outcomes на этапах — базово без виджетов: widgets: [], в outcomes без widget_slug. Виджеты на этапах добавляй только если в запросе/кейсе явно требуется запуск виджета на этапе или результате.
 - Новые воронки создавай через funnels.create со вложенным массивом stages (не используй funnel_id для новых воронок).
 - Для существующих элементов используй update/delete по id. Для полной перестройки — delete старых + create новых.
-- comment у полей — тип и назначение; action у этапа — обязательные действия менеджера.
+- comment у полей — дополнительное пояснение; value_type, обязательность и отображение указывай явно; options — для select/multiselect.
 - Не выдумывай id. Если проект пустой — только create.
 - Не отказывайся. Верни максимально полный набор изменений.
 PROMPT;
 
-        $userPrompt = "Запрос клиента:\n{$message}\n\nПодготовленный кейс:\n{$reportExcerpt}";
+        $userPrompt = "Запрос клиента:\n{$message}\n\nПодготовленный кейс:\n{$report}";
 
         $content = $this->f5AiService->chatCompletion([
             ['role' => 'system', 'content' => $systemPrompt],
             ['role' => 'user', 'content' => $userPrompt],
         ], [
-            'model' => config('f5ai.model'),
+            'user' => F5AiModels::resolveUser($project, $preferredUserId),
             'max_tokens' => (int) config('f5ai.max_tokens_changes', 12000),
             'temperature' => 0.3,
         ]);

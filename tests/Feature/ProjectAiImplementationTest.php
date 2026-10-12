@@ -28,6 +28,8 @@ class ProjectAiImplementationTest extends TestCase
 
         $this->assertTrue($service->isImplementationBrief(str_repeat('а', 1600)));
         $this->assertTrue($service->isImplementationBrief('Подготовь кейс внедрения amoCRM для производства'));
+        $this->assertFalse($service->isImplementationBrief('Сделай воронку сопровождение клиентов'));
+        $this->assertFalse($service->isImplementationBrief('В воронку Ренимация добавь этапы'));
     }
 
     public function test_applies_funnel_with_nested_stages(): void

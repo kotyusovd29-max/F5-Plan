@@ -4,6 +4,7 @@ namespace App\Services;
 
 use App\Models\Project;
 use App\Models\ProjectSkkField;
+use App\Support\F5WidgetCatalog;
 use Illuminate\Support\Facades\DB;
 
 class ProjectAiApplier
@@ -57,9 +58,8 @@ class ProjectAiApplier
                 $sortOrder++;
 
                 $project->skkFields()->create([
+                    ...ProjectSkkField::normalizeAttributes($field),
                     'entity_type' => $entityType,
-                    'name' => $field['name'],
-                    'comment' => $field['comment'] ?: null,
                     'sort_order' => $sortOrder,
                 ]);
 
@@ -79,11 +79,16 @@ class ProjectAiApplier
         $sortOrder = (int) ($project->integrations()->max('sort_order') ?? 0);
 
         foreach ($integrations as $integration) {
+            $resolved = F5WidgetCatalog::normalizeIntegrationInput($integration);
+
+            if ($resolved['name'] === '') {
+                continue;
+            }
+
             $sortOrder++;
 
             $project->integrations()->create([
-                'name' => $integration['name'],
-                'comment' => $integration['comment'] ?: null,
+                ...$resolved,
                 'sort_order' => $sortOrder,
             ]);
 

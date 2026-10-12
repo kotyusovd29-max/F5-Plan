@@ -11,6 +11,14 @@
         "vite": "^8.0.0"
     },
     "dependencies": {
-        "sortablejs": "^1.15.7"
+        "@inertiajs/vue3": "^3.6.1",
+        "@tailwindcss/vite": "^4.3.2",
+        "@vitejs/plugin-vue": "^6.0.7",
+        "dompurify": "^3.4.12",
+        "driver.js": "^1.8.0",
+        "marked": "^18.0.6",
+        "sortablejs": "^1.15.7",
+        "tailwindcss": "^4.3.2",
+        "vue": "^3.5.39"
     }
 }

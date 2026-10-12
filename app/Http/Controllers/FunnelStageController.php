@@ -9,6 +9,7 @@ use App\Http\Requests\UpdateFunnelStageRequest;
 use App\Models\Funnel;
 use App\Models\FunnelStage;
 use App\Models\Project;
+use App\Services\FunnelCanvasLayoutService;
 use App\Services\SortOrderService;
 use App\Support\FunnelStageColors;
 use Illuminate\Http\JsonResponse;
@@ -43,12 +44,14 @@ class FunnelStageController extends Controller
             ?? FunnelStageColors::defaultForIndex($existingStagesCount);
 
         $funnel->stages()->create([
-            ...$request->safe()->only(['name', 'action', 'comment']),
+            ...$request->stageAttributes(),
             'color' => $color,
             'sort_order' => $sortOrder,
-            'canvas_pos_x' => 80 + ($existingStagesCount * 300),
-            'canvas_pos_y' => 200,
+            'canvas_pos_x' => null,
+            'canvas_pos_y' => null,
         ]);
+
+        app(FunnelCanvasLayoutService::class)->ensureStagePositions($funnel->fresh(['stages']));
 
         return $this->respondForCanvas(
             $request,
@@ -68,7 +71,7 @@ class FunnelStageController extends Controller
         abort_unless($funnel->project_id === $project->id, 404);
         abort_unless($stage->funnel_id === $funnel->id, 404);
 
-        $stage->update($request->validated());
+        $stage->update($request->stageAttributes());
 
         return $this->respondForCanvas(
             $request,

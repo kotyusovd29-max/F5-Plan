@@ -24,7 +24,9 @@ class ProjectAiController extends Controller
         try {
             $input = $request->validated();
             $messages = $planner->buildMessages($project, $input);
-            $content = $f5AiService->chatCompletion($messages);
+            $content = $f5AiService->chatCompletion($messages, [
+                'user' => $request->user(),
+            ]);
             $proposal = $parser->parse($content);
 
             return response()->json([

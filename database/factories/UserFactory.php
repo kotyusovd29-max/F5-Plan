@@ -30,7 +30,20 @@ class UserFactory extends Factory
             'email_verified_at' => now(),
             'password' => static::$password ??= Hash::make('password'),
             'remember_token' => Str::random(10),
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+            'rop_id' => null,
         ];
+    }
+
+    public function configure(): static
+    {
+        return $this->afterMaking(function (User $user) {
+            if ($user->is_admin) {
+                $user->role = User::ROLE_ADMIN;
+                $user->rop_id = null;
+            }
+        });
     }
 
     /**
@@ -40,6 +53,33 @@ class UserFactory extends Factory
     {
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
+        ]);
+    }
+
+    public function admin(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_admin' => true,
+            'role' => User::ROLE_ADMIN,
+            'rop_id' => null,
+        ]);
+    }
+
+    public function rop(): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_admin' => false,
+            'role' => User::ROLE_ROP,
+            'rop_id' => null,
+        ]);
+    }
+
+    public function employee(?User $rop = null): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'is_admin' => false,
+            'role' => User::ROLE_EMPLOYEE,
+            'rop_id' => $rop?->id,
         ]);
     }
 }

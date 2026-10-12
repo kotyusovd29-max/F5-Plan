@@ -13,6 +13,10 @@ trait RespondsForCanvas
         RedirectResponse $redirect,
         string $message = 'Сохранено'
     ): RedirectResponse|JsonResponse {
+        if ($request->header('X-Inertia')) {
+            return $redirect;
+        }
+
         if (
             $request->expectsJson()
             || $request->wantsJson()

@@ -19,7 +19,7 @@ class ProjectDocxExporter
 
     public function build(Project $project): string
     {
-        $project->load(['funnels.stages', 'integrations', 'skkFields']);
+        $project->load(['funnels.stages', 'integrations', 'workStages', 'skkFields', 'aiMessages']);
 
         $phpWord = new PhpWord;
         $phpWord->setDefaultFontName('Arial');
@@ -31,9 +31,37 @@ class ProjectDocxExporter
         $section->addText('План внедрения amoCRM');
         $section->addTextBreak();
 
+        if ($project->website || $project->business_sphere || $project->current_services || $project->employees_count || $project->client_tasks) {
+            $section->addTitle('О компании', 2);
+
+            if ($project->website) {
+                $section->addText('Сайт: '.$project->website);
+            }
+
+            if ($project->business_sphere) {
+                $section->addText('Сфера бизнеса: '.$project->business_sphere);
+            }
+
+            if ($project->employees_count) {
+                $section->addText('Сотрудников: '.$project->employees_count);
+            }
+
+            if ($project->current_services) {
+                $section->addText('Сервисы: '.$project->current_services);
+            }
+
+            if ($project->client_tasks) {
+                $section->addText('Задачи клиента: '.$project->client_tasks);
+            }
+
+            $section->addTextBreak();
+        }
+
+        $this->addAnalyticalReportSection($section, $project);
         $this->addFunnelsSection($section, $project);
         $this->addSkkSection($section, $project);
         $this->addIntegrationsSection($section, $project);
+        $this->addWorkStagesSection($section, $project);
 
         $tempFile = sys_get_temp_dir().'/f5plan_'.uniqid('', true).'.docx';
         $writer = IOFactory::createWriter($phpWord, 'Word2007');
@@ -47,6 +75,50 @@ class ProjectDocxExporter
         $name = preg_replace('/[^\p{L}\p{N}\-_]+/u', '_', $project->company_name) ?: 'project';
 
         return $name.'_план.docx';
+    }
+
+    private function addAnalyticalReportSection($section, Project $project): void
+    {
+        $report = app(ProjectAiReportExtractor::class)->latestReport($project);
+
+        if ($report === null || $report === '') {
+            return;
+        }
+
+        $section->addTitle('Аналитическая записка', 2);
+        $this->writeMarkdownLikeText($section, $report);
+        $section->addTextBreak();
+    }
+
+    private function writeMarkdownLikeText($section, string $text): void
+    {
+        $lines = preg_split('/\r\n|\r|\n/', $text) ?: [];
+
+        foreach ($lines as $index => $line) {
+            $line = trim((string) preg_replace('/\*\*(.*?)\*\*/u', '$1', $line));
+
+            if ($line === '') {
+                if ($index > 0) {
+                    $section->addTextBreak();
+                }
+
+                continue;
+            }
+
+            if (preg_match('/^#{1,3}\s+(.+)$/', $line, $matches)) {
+                $section->addTitle($matches[1], 3);
+
+                continue;
+            }
+
+            if (preg_match('/^[-*]\s+(.+)$/', $line, $matches)) {
+                $section->addText('• '.$matches[1]);
+
+                continue;
+            }
+
+            $section->addText($line);
+        }
     }
 
     private function addFunnelsSection($section, Project $project): void
@@ -92,7 +164,7 @@ class ProjectDocxExporter
     private function addSkkSection($section, Project $project): void
     {
         $section->addTitle(ProjectSkkField::SECTION_LABEL, 2);
-        $skkByType = $project->skkFields->groupBy('entity_type');
+        $skkByType = $project->skkFields->load('funnelStage.funnel')->groupBy('entity_type');
 
         foreach (ProjectSkkField::TYPE_LABELS as $type => $label) {
             $section->addText($label, ['bold' => true]);
@@ -104,16 +176,56 @@ class ProjectDocxExporter
                 $table = $section->addTable(self::TABLE_STYLE);
 
                 $table->addRow();
-                $this->addHeaderCell($table, 9500, 'Название поля');
+                $this->addHeaderCell($table, 2200, 'Название');
+                $this->addHeaderCell($table, 1200, 'Тип');
+                $this->addHeaderCell($table, 900, 'Обяз.');
+                $this->addHeaderCell($table, 1800, 'Где показывать');
+                $this->addHeaderCell($table, 1800, 'Значения');
+                $this->addHeaderCell($table, 1600, 'Этап воронки');
 
                 foreach ($fields as $field) {
                     $table->addRow();
-                    $this->addCellWithMultilineText($table, 9500, $field->name);
+                    $this->addCellWithMultilineText($table, 2200, $field->name);
+                    $this->addCellWithMultilineText(
+                        $table,
+                        1200,
+                        ProjectSkkField::VALUE_TYPE_LABELS[$field->value_type] ?? $field->value_type
+                    );
+                    $this->addCellWithMultilineText($table, 900, $field->is_required ? 'Да' : 'Нет');
+                    $this->addCellWithMultilineText($table, 1800, $this->showInLabel($field));
+                    $this->addCellWithMultilineText(
+                        $table,
+                        1800,
+                        $field->options ? implode(', ', $field->options) : null
+                    );
+                    $stageLabel = $field->funnelStage
+                        ? ($field->funnelStage->funnel?->name ?? 'Воронка').' → '.$field->funnelStage->name
+                        : null;
+                    $this->addCellWithMultilineText($table, 1600, $stageLabel);
                 }
             }
 
             $section->addTextBreak();
         }
+    }
+
+    private function showInLabel(ProjectSkkField $field): ?string
+    {
+        $parts = [];
+
+        if ($field->show_in_card) {
+            $parts[] = 'карточка';
+        }
+
+        if ($field->show_in_list) {
+            $parts[] = 'список';
+        }
+
+        if ($field->show_in_filter) {
+            $parts[] = 'фильтр';
+        }
+
+        return $parts === [] ? null : implode(', ', $parts);
     }
 
     private function addIntegrationsSection($section, Project $project): void
@@ -136,6 +248,39 @@ class ProjectDocxExporter
             $table->addRow();
             $this->addCellWithMultilineText($table, 3500, $integration->name);
             $this->addCellWithMultilineText($table, 6000, $integration->comment);
+        }
+    }
+
+    private function addWorkStagesSection($section, Project $project): void
+    {
+        $section->addTitle('Этапы работ', 2);
+
+        if ($project->workStages->isEmpty()) {
+            $section->addText('Этапы работ не добавлены.');
+
+            return;
+        }
+
+        $table = $section->addTable(self::TABLE_STYLE);
+
+        $table->addRow();
+        $this->addHeaderCell($table, 2200, 'Этап');
+        $this->addHeaderCell($table, 4000, 'Состав работ');
+        $this->addHeaderCell($table, 1600, 'Срок, раб. дн.');
+        $this->addHeaderCell($table, 1700, 'Стоимость');
+
+        foreach ($project->workStages as $stage) {
+            $table->addRow();
+            $this->addCellWithMultilineText($table, 2200, $stage->name);
+            $this->addCellWithMultilineText($table, 4000, $stage->composition);
+            $durationLabel = $stage->duration_days !== null
+                ? (string) (int) $stage->duration_days
+                : null;
+            $this->addCellWithMultilineText($table, 1600, $durationLabel);
+            $costLabel = $stage->cost !== null
+                ? number_format((float) $stage->cost, 2, ',', ' ').' ₽'
+                : null;
+            $this->addCellWithMultilineText($table, 1700, $costLabel);
         }
     }
 

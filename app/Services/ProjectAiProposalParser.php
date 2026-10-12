@@ -5,6 +5,7 @@ namespace App\Services;
 use App\Exceptions\F5AiException;
 use App\Models\Project;
 use App\Models\ProjectSkkField;
+use App\Support\F5WidgetCatalog;
 use Illuminate\Support\Facades\DB;
 
 class ProjectAiProposalParser
@@ -63,13 +64,13 @@ class ProjectAiProposalParser
             foreach (ProjectSkkField::TYPES as $type) {
                 $normalized['skk_fields'][$type] = $this->normalizeItems(
                     $data['skk_fields'][$type] ?? [],
-                    ['name', 'comment']
+                    ['name', 'comment', 'value_type', 'is_required', 'show_in_card', 'show_in_list', 'show_in_filter', 'options', 'funnel_stage_id']
                 );
             }
         }
 
         if (isset($data['integrations']) && is_array($data['integrations'])) {
-            $normalized['integrations'] = $this->normalizeItems($data['integrations'], ['name', 'comment']);
+            $normalized['integrations'] = $this->normalizeIntegrations($data['integrations']);
         }
 
         if (isset($data['funnels']) && is_array($data['funnels'])) {
@@ -117,8 +118,37 @@ class ProjectAiProposalParser
 
     /**
      * @param  array<int, mixed>  $items
+     * @return array<int, array<string, mixed>>
+     */
+    private function normalizeIntegrations(array $items): array
+    {
+        $normalized = [];
+
+        foreach ($items as $item) {
+            if (! is_array($item)) {
+                continue;
+            }
+
+            $resolved = F5WidgetCatalog::normalizeIntegrationInput([
+                'widget_slug' => $item['widget_slug'] ?? null,
+                'name' => $item['name'] ?? '',
+                'comment' => $item['comment'] ?? '',
+            ]);
+
+            if ($resolved['name'] === '') {
+                continue;
+            }
+
+            $normalized[] = $resolved;
+        }
+
+        return $normalized;
+    }
+
+    /**
+     * @param  array<int, mixed>  $items
      * @param  array<int, string>  $fields
-     * @return array<int, array<string, string>>
+     * @return array<int, array<string, mixed>>
      */
     private function normalizeItems(array $items, array $fields): array
     {
@@ -126,6 +156,18 @@ class ProjectAiProposalParser
 
         foreach ($items as $item) {
             if (! is_array($item)) {
+                continue;
+            }
+
+            if (in_array('value_type', $fields, true)) {
+                $row = ProjectSkkField::normalizeAttributes($item);
+
+                if ($row['name'] === '') {
+                    continue;
+                }
+
+                $normalized[] = $row;
+
                 continue;
             }
 

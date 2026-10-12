@@ -21,7 +21,7 @@ class ProjectIntegrationController extends Controller
         $sortOrder = ($project->integrations()->max('sort_order') ?? 0) + 1;
 
         $integration = $project->integrations()->create([
-            ...$request->safe()->only(['name', 'comment']),
+            ...$request->resolvedIntegrationData(),
             'sort_order' => $sortOrder,
         ]);
 
@@ -41,7 +41,7 @@ class ProjectIntegrationController extends Controller
     ): RedirectResponse|JsonResponse {
         abort_unless($integration->project_id === $project->id, 404);
 
-        $integration->update($request->validated());
+        $integration->update($request->resolvedIntegrationData());
 
         return $this->respondForCanvas(
             $request,

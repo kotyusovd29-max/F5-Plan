@@ -2,11 +2,14 @@
 
 namespace App\Http\Requests;
 
+use App\Http\Requests\Concerns\ValidatesFunnelStageAttributes;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
 
 class StoreFunnelStageRequest extends FormRequest
 {
+    use ValidatesFunnelStageAttributes;
+
     public function authorize(): bool
     {
         return $this->user() !== null;
@@ -24,6 +27,7 @@ class StoreFunnelStageRequest extends FormRequest
                 'integer',
                 Rule::exists('funnel_stages', 'id')->where('funnel_id', $this->funnelId()),
             ],
+            ...$this->funnelStageAttributeRules($this->funnelId()),
         ];
     }
 
@@ -32,6 +36,38 @@ class StoreFunnelStageRequest extends FormRequest
         return [
             'name.required' => 'Укажите название этапа.',
         ];
+    }
+
+    protected function prepareForValidation(): void
+    {
+        if ($this->has('outcomes') && is_string($this->input('outcomes'))) {
+            $decoded = json_decode($this->input('outcomes'), true);
+            $this->merge(['outcomes' => is_array($decoded) ? $decoded : []]);
+        }
+
+        if ($this->has('widgets') && is_string($this->input('widgets'))) {
+            $decoded = json_decode($this->input('widgets'), true);
+            $this->merge(['widgets' => is_array($decoded) ? $decoded : []]);
+        }
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function stageAttributes(): array
+    {
+        return $this->normalizeFunnelStageAttributes(
+            $this->safe()->only([
+                'name',
+                'action',
+                'comment',
+                'stage_type',
+                'deadline',
+                'kind',
+                'outcomes',
+                'widgets',
+            ])
+        );
     }
 
     private function funnelId(): int

@@ -13,11 +13,28 @@ class FunnelStage extends Model
         'name',
         'action',
         'comment',
+        'stage_type',
+        'deadline',
+        'kind',
+        'outcomes',
+        'widgets',
         'color',
         'sort_order',
+        'amocrm_id',
         'canvas_pos_x',
         'canvas_pos_y',
     ];
+
+    protected function casts(): array
+    {
+        return [
+            'outcomes' => 'array',
+            'widgets' => 'array',
+            'sort_order' => 'integer',
+            'canvas_pos_x' => 'integer',
+            'canvas_pos_y' => 'integer',
+        ];
+    }
 
     public function funnel(): BelongsTo
     {

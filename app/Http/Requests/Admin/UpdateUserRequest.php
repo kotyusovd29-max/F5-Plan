@@ -2,8 +2,10 @@
 
 namespace App\Http\Requests\Admin;
 
+use App\Models\User;
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Validator;
 
 class UpdateUserRequest extends FormRequest
 {
@@ -14,14 +16,24 @@ class UpdateUserRequest extends FormRequest
 
     public function rules(): array
     {
-        $userId = $this->route('user')->id;
+        /** @var User $target */
+        $target = $this->route('user');
+        $userId = $target->id;
         $isSelf = $this->user()->id === $userId;
 
         return [
             'name' => ['required', 'string', 'max:255'],
             'email' => ['required', 'email', 'max:255', Rule::unique('users', 'email')->ignore($userId)],
             'password' => ['nullable', 'string', 'min:8', 'confirmed'],
-            'is_admin' => [$isSelf ? 'prohibited' : 'sometimes', 'boolean'],
+            'role' => [$isSelf ? 'prohibited' : 'required', 'string', Rule::in(User::ROLES)],
+            'rop_id' => [
+                $isSelf ? 'prohibited' : Rule::requiredIf(fn () => $this->input('role') === User::ROLE_EMPLOYEE),
+                'nullable',
+                'integer',
+                Rule::exists('users', 'id')->where(fn ($query) => $query
+                    ->where('role', User::ROLE_ROP)
+                    ->where('id', '!=', $userId)),
+            ],
         ];
     }
 
@@ -33,18 +45,64 @@ class UpdateUserRequest extends FormRequest
             'email.unique' => 'Пользователь с таким email уже существует.',
             'password.min' => 'Пароль должен быть не менее 8 символов.',
             'password.confirmed' => 'Пароли не совпадают.',
-            'is_admin.prohibited' => 'Нельзя изменить свою роль.',
+            'role.prohibited' => 'Нельзя изменить свою роль.',
+            'role.required' => 'Выберите роль.',
+            'role.in' => 'Некорректная роль.',
+            'rop_id.required' => 'Выберите РОПа для сотрудника.',
+            'rop_id.exists' => 'Выбранный пользователь не является РОПом.',
+            'rop_id.prohibited' => 'Нельзя изменить свою роль.',
         ];
     }
 
-    protected function prepareForValidation(): void
+    public function withValidator(Validator $validator): void
     {
-        if (! $this->user()->isAdmin() || $this->user()->id === $this->route('user')->id) {
-            return;
+        $validator->after(function (Validator $validator): void {
+            /** @var User $target */
+            $target = $this->route('user');
+
+            if ($this->user()->id === $target->id) {
+                return;
+            }
+
+            $role = $this->input('role');
+
+            if ($role === User::ROLE_EMPLOYEE && ! filled($this->input('rop_id'))) {
+                $validator->errors()->add('rop_id', 'Выберите РОПа для сотрудника.');
+            }
+
+            if (
+                $target->isRop()
+                && $role !== User::ROLE_ROP
+                && $target->employees()->exists()
+            ) {
+                $validator->errors()->add(
+                    'role',
+                    'Нельзя сменить роль РОПа, пока к нему привязаны сотрудники. Сначала переназначьте их.'
+                );
+            }
+        });
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    public function userPayload(): array
+    {
+        /** @var User $target */
+        $target = $this->route('user');
+        $isSelf = $this->user()->id === $target->id;
+
+        $data = $this->safe()->only(['name', 'email', 'password']);
+
+        if ($isSelf) {
+            return $data;
         }
 
-        $this->merge([
-            'is_admin' => $this->boolean('is_admin'),
-        ]);
+        $roleData = $this->safe()->only(['role', 'rop_id']);
+
+        return [
+            ...$data,
+            ...User::normalizeRolePayload($roleData),
+        ];
     }
 }

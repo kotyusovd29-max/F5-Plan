@@ -3,6 +3,7 @@
 namespace App\Services;
 
 use App\Models\Project;
+use App\Support\F5WidgetCatalog;
 
 class ProjectAiPlanner
 {
@@ -21,11 +22,11 @@ class ProjectAiPlanner
         $sectionDescriptions = [];
 
         if (in_array('skk_fields', $sections, true)) {
-            $sectionDescriptions[] = '- skk_fields: пользовательские поля CRM для сделок (deals), контактов (contacts) и компаний (companies). Каждое поле: name (краткое название), comment (зачем нужно поле).';
+            $sectionDescriptions[] = '- skk_fields: пользовательские поля CRM для сделок (deals), контактов (contacts) и компаний (companies). Каждое поле: name, value_type (text|number|date|select|multiselect|toggle), is_required (bool), show_in_card/show_in_list/show_in_filter (bool), options (массив строк для select/multiselect), funnel_stage_id (id этапа, если поле заполняется на этапе), comment (доп. пояснение).';
         }
 
         if (in_array('integrations', $sections, true)) {
-            $sectionDescriptions[] = '- integrations: интеграции и виджеты (телефония, мессенджеры, сайт и т.д.). Каждый элемент: name, comment.';
+            $sectionDescriptions[] = '- integrations: виджеты команды F5 из каталога f5_widgets. Каждый элемент: widget_slug (точный slug из каталога), comment (сценарий). name и url подставятся автоматически. Если виджета нет в каталоге — widget_slug: null, name, comment.';
         }
 
         if (in_array('funnels', $sections, true)) {
@@ -33,6 +34,12 @@ class ProjectAiPlanner
         }
 
         $sectionsText = implode("\n", $sectionDescriptions);
+        $widgetCatalogJson = in_array('integrations', $sections, true)
+            ? json_encode(F5WidgetCatalog::forAiContext(), JSON_UNESCAPED_UNICODE)
+            : '';
+        $widgetRules = in_array('integrations', $sections, true)
+            ? F5WidgetCatalog::integrationPromptRules()
+            : '';
 
         $systemPrompt = <<<PROMPT
 Ты — эксперт по внедрению CRM для российского бизнеса. По данным о компании клиента предложи структуру проекта.
@@ -42,11 +49,11 @@ class ProjectAiPlanner
 Схема ответа:
 {
   "skk_fields": {
-    "deals": [{"name": "...", "comment": "..."}],
+    "deals": [{"name": "...", "value_type": "text", "is_required": true, "show_in_card": true, "show_in_list": false, "show_in_filter": false, "options": [], "comment": "..."}],
     "contacts": [{"name": "...", "comment": "..."}],
     "companies": [{"name": "...", "comment": "..."}]
   },
-  "integrations": [{"name": "...", "comment": "..."}],
+  "integrations": [{"widget_slug": "chatter", "comment": "..."}],
   "funnels": [
     {
       "name": "...",
@@ -58,6 +65,10 @@ class ProjectAiPlanner
 
 Включай в JSON только запрошенные разделы:
 {$sectionsText}
+
+{$widgetRules}
+Каталог виджетов F5 (f5_widgets):
+{$widgetCatalogJson}
 
 Для незапрошенных разделов не добавляй ключи. Названия на русском, конкретные и применимые к бизнесу клиента.
 PROMPT;

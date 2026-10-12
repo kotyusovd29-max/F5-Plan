@@ -7,6 +7,9 @@ use App\Models\FunnelStage;
 use App\Models\Project;
 use App\Models\ProjectIntegration;
 use App\Models\ProjectSkkField;
+use App\Support\F5WidgetCatalog;
+use App\Support\FunnelStageOutcomes;
+use App\Support\FunnelStageWidgets;
 use Illuminate\Support\Facades\DB;
 
 class ProjectAiChangesApplier
@@ -30,7 +33,7 @@ class ProjectAiChangesApplier
         DB::transaction(function () use ($project, $changes, &$counts) {
             if (isset($changes['project']['fields']) && is_array($changes['project']['fields'])) {
                 $fields = collect($changes['project']['fields'])
-                    ->only(['company_name', 'employees_count', 'client_tasks'])
+                    ->only(['company_name', 'website', 'business_sphere', 'current_services', 'employees_count', 'client_tasks'])
                     ->filter(fn ($value) => $value !== null && $value !== '')
                     ->all();
 
@@ -54,6 +57,10 @@ class ProjectAiChangesApplier
 
             if (isset($changes['stages'])) {
                 $this->applyStageChanges($project, $changes['stages'], $counts);
+            }
+
+            if (isset($changes['work_stages'])) {
+                $this->applyWorkStageChanges($project, $changes['work_stages'], $counts);
             }
         });
 
@@ -86,7 +93,20 @@ class ProjectAiChangesApplier
                 continue;
             }
 
-            $field->update(collect($item)->only(['name', 'comment'])->filter(fn ($v) => $v !== null)->all());
+            $field->update($this->normalizeSkkAttributes(
+                $project,
+                collect($item)->only([
+                    'name',
+                    'comment',
+                    'value_type',
+                    'is_required',
+                    'show_in_card',
+                    'show_in_list',
+                    'show_in_filter',
+                    'options',
+                    'funnel_stage_id',
+                ])->filter(fn ($v) => $v !== null)->all()
+            ));
             $counts['updated']++;
         }
 
@@ -100,9 +120,8 @@ class ProjectAiChangesApplier
             $sortOrder = (int) ($project->skkFields()->where('entity_type', $entityType)->max('sort_order') ?? 0) + 1;
 
             $project->skkFields()->create([
+                ...$this->normalizeSkkAttributes($project, $item),
                 'entity_type' => $entityType,
-                'name' => $item['name'],
-                'comment' => $item['comment'] ?? null,
                 'sort_order' => $sortOrder,
             ]);
 
@@ -134,20 +153,27 @@ class ProjectAiChangesApplier
                 continue;
             }
 
-            $integration->update(collect($item)->only(['name', 'comment'])->filter(fn ($v) => $v !== null)->all());
+            $resolved = F5WidgetCatalog::normalizeIntegrationInput([
+                'widget_slug' => $item['widget_slug'] ?? $integration->widget_slug,
+                'name' => $item['name'] ?? $integration->name,
+                'comment' => array_key_exists('comment', $item) ? $item['comment'] : $integration->comment,
+            ]);
+
+            $integration->update($resolved);
             $counts['updated']++;
         }
 
         foreach ($section['create'] ?? [] as $item) {
-            if (($item['name'] ?? '') === '') {
+            $resolved = F5WidgetCatalog::normalizeIntegrationInput($item);
+
+            if ($resolved['name'] === '') {
                 continue;
             }
 
             $sortOrder = (int) ($project->integrations()->max('sort_order') ?? 0) + 1;
 
             $project->integrations()->create([
-                'name' => $item['name'],
-                'comment' => $item['comment'] ?? null,
+                ...$resolved,
                 'sort_order' => $sortOrder,
             ]);
 
@@ -198,22 +224,7 @@ class ProjectAiChangesApplier
 
             $counts['created']++;
 
-            foreach ($item['stages'] ?? [] as $index => $stageData) {
-                if (($stageData['name'] ?? '') === '') {
-                    continue;
-                }
-
-                $funnel->stages()->create([
-                    'name' => $stageData['name'],
-                    'action' => $stageData['action'] ?: null,
-                    'comment' => $stageData['comment'] ?: null,
-                    'sort_order' => $index + 1,
-                    'canvas_pos_x' => 80 + ($index * 300),
-                    'canvas_pos_y' => 200,
-                ]);
-
-                $counts['created']++;
-            }
+            $this->createStagesForFunnel($funnel, $item['stages'] ?? [], $counts);
         }
     }
 
@@ -241,7 +252,31 @@ class ProjectAiChangesApplier
                 continue;
             }
 
-            $stage->update(collect($item)->only(['name', 'action', 'comment'])->filter(fn ($v) => $v !== null)->all());
+            $payload = $this->stageAttributePayload($item);
+
+            if (array_key_exists('outcomes', $item)) {
+                $nameToId = $stage->funnel->stages()
+                    ->get(['id', 'name'])
+                    ->mapWithKeys(fn (FunnelStage $row) => [mb_strtolower(trim((string) $row->name)) => (int) $row->id])
+                    ->all();
+
+                $widgets = $payload['widgets']
+                    ?? FunnelStageWidgets::normalize($item['widgets'] ?? (is_array($stage->widgets) ? $stage->widgets : []));
+
+                $payload['outcomes'] = FunnelStageOutcomes::normalize(
+                    $this->resolveStageOutcomeTargets(
+                        is_array($item['outcomes']) ? $item['outcomes'] : [],
+                        $nameToId
+                    ),
+                    $widgets
+                );
+            }
+
+            if ($payload === []) {
+                continue;
+            }
+
+            $stage->update($payload);
             $counts['updated']++;
         }
 
@@ -252,16 +287,198 @@ class ProjectAiChangesApplier
                 continue;
             }
 
-            $sortOrder = (int) ($funnel->stages()->max('sort_order') ?? 0) + 1;
-            $existingCount = $funnel->stages()->count();
+            $this->createStagesForFunnel($funnel, [$item], $counts);
+        }
+    }
 
-            $funnel->stages()->create([
-                'name' => $item['name'],
-                'action' => $item['action'] ?? null,
-                'comment' => $item['comment'] ?? null,
+    /**
+     * @param  list<array<string, mixed>>  $stages
+     * @param  array<string, int>  $counts
+     */
+    private function createStagesForFunnel(Funnel $funnel, array $stages, array &$counts): void
+    {
+        $pending = [];
+        $sortOrderToId = [];
+        $nameToId = [];
+        $baseSort = (int) ($funnel->stages()->max('sort_order') ?? 0);
+        $existingCount = $funnel->stages()->count();
+
+        foreach ($stages as $index => $stageData) {
+            if (($stageData['name'] ?? '') === '') {
+                continue;
+            }
+
+            $sortOrder = $baseSort + $index + 1;
+            $payload = $this->stageAttributePayload($stageData, forCreate: true);
+            $payload['name'] = $stageData['name'];
+            $payload['sort_order'] = $sortOrder;
+            $payload['canvas_pos_x'] = 80 + (($existingCount + $index) * 300);
+            $payload['canvas_pos_y'] = 200;
+            $payload['outcomes'] = [];
+
+            $stage = $funnel->stages()->create($payload);
+
+            $pending[] = [$stage, $stageData];
+            $sortOrderToId[$sortOrder] = $stage->id;
+            $sortOrderToId[$index + 1] = $stage->id;
+            $nameToId[mb_strtolower(trim((string) $stage->name))] = $stage->id;
+            $counts['created']++;
+        }
+
+        foreach ($pending as [$stage, $stageData]) {
+            if (! array_key_exists('outcomes', $stageData)) {
+                continue;
+            }
+
+            $outcomes = $this->resolveStageOutcomeTargets(
+                is_array($stageData['outcomes']) ? $stageData['outcomes'] : [],
+                $nameToId
+            );
+            $widgets = FunnelStageWidgets::normalize(
+                $stageData['widgets'] ?? (is_array($stage->widgets) ? $stage->widgets : [])
+            );
+
+            $stage->update([
+                'outcomes' => FunnelStageOutcomes::toProjectIds(
+                    FunnelStageOutcomes::normalize($outcomes, $widgets),
+                    $sortOrderToId
+                ),
+            ]);
+        }
+    }
+
+    /**
+     * @param  array<string, mixed>  $item
+     * @return array<string, mixed>
+     */
+    private function stageAttributePayload(array $item, bool $forCreate = false): array
+    {
+        $payload = [];
+
+        foreach (['name', 'action', 'comment', 'stage_type', 'deadline'] as $field) {
+            if (! array_key_exists($field, $item)) {
+                continue;
+            }
+
+            $value = $item[$field];
+
+            if (is_string($value)) {
+                $value = trim($value);
+            }
+
+            if ($forCreate && in_array($field, ['action', 'comment', 'stage_type', 'deadline'], true)) {
+                $payload[$field] = $value !== '' && $value !== null ? $value : null;
+
+                continue;
+            }
+
+            if ($value !== null) {
+                $payload[$field] = $value === '' ? null : $value;
+            }
+        }
+
+        if (array_key_exists('kind', $item)) {
+            $kind = trim((string) $item['kind']);
+            $payload['kind'] = in_array($kind, FunnelStageOutcomes::KINDS, true) ? $kind : 'normal';
+        } elseif ($forCreate) {
+            $payload['kind'] = 'normal';
+        }
+
+        if (array_key_exists('widgets', $item)) {
+            $payload['widgets'] = FunnelStageWidgets::normalize($item['widgets']);
+        }
+
+        if (array_key_exists('outcomes', $item) && ! $forCreate) {
+            $widgets = $payload['widgets']
+                ?? FunnelStageWidgets::normalize($item['widgets'] ?? []);
+            $payload['outcomes'] = FunnelStageOutcomes::normalize($item['outcomes'], $widgets);
+        }
+
+        return $payload;
+    }
+
+    /**
+     * @param  list<array<string, mixed>>  $outcomes
+     * @param  array<string, int>  $nameToId
+     * @return list<array<string, mixed>>
+     */
+    private function resolveStageOutcomeTargets(array $outcomes, array $nameToId): array
+    {
+        return array_map(function (array $row) use ($nameToId) {
+            $name = trim((string) ($row['target_stage_name'] ?? ''));
+
+            if ($name !== '') {
+                $mapped = $nameToId[mb_strtolower($name)] ?? null;
+
+                if ($mapped !== null) {
+                    $row['target_stage_id'] = $mapped;
+                }
+            }
+
+            unset($row['target_stage_name']);
+
+            return $row;
+        }, $outcomes);
+    }
+
+    /**
+     * @param  array<string, mixed>  $section
+     * @param  array<string, int>  $counts
+     */
+    private function applyWorkStageChanges(Project $project, array $section, array &$counts): void
+    {
+        foreach ($section['delete'] ?? [] as $id) {
+            $stage = $project->workStages()->find($id);
+
+            if (! $stage) {
+                continue;
+            }
+
+            $deletedOrder = $stage->sort_order;
+            $stage->delete();
+
+            $project->workStages()
+                ->where('sort_order', '>', $deletedOrder)
+                ->decrement('sort_order');
+
+            $counts['deleted']++;
+        }
+
+        foreach ($section['update'] ?? [] as $item) {
+            $stage = $project->workStages()->find($item['id'] ?? null);
+
+            if (! $stage) {
+                continue;
+            }
+
+            $payload = collect($item)
+                ->only(['name', 'composition', 'cost', 'duration_days'])
+                ->filter(fn ($value, $key) => in_array($key, ['cost', 'composition', 'duration_days'], true) || ($value !== null && $value !== ''))
+                ->all();
+
+            if ($payload === []) {
+                continue;
+            }
+
+            $stage->update($payload);
+            $counts['updated']++;
+        }
+
+        foreach ($section['create'] ?? [] as $item) {
+            $name = trim((string) ($item['name'] ?? ''));
+
+            if ($name === '') {
+                continue;
+            }
+
+            $sortOrder = (int) ($project->workStages()->max('sort_order') ?? 0) + 1;
+
+            $project->workStages()->create([
+                'name' => $name,
+                'composition' => $item['composition'] ?? null,
+                'cost' => $item['cost'] ?? null,
+                'duration_days' => $item['duration_days'] ?? null,
                 'sort_order' => $sortOrder,
-                'canvas_pos_x' => 80 + ($existingCount * 300),
-                'canvas_pos_y' => 200,
             ]);
 
             $counts['created']++;
@@ -317,5 +534,21 @@ class ProjectAiChangesApplier
             ->where('id', $stageId)
             ->whereHas('funnel', fn ($query) => $query->where('project_id', $project->id))
             ->first();
+    }
+
+    /**
+     * @param  array<string, mixed>  $attributes
+     * @return array<string, mixed>
+     */
+    private function normalizeSkkAttributes(Project $project, array $attributes): array
+    {
+        $normalized = ProjectSkkField::normalizeAttributes($attributes);
+
+        if (! empty($normalized['funnel_stage_id'])
+            && ! $this->findStageForProject($project, (int) $normalized['funnel_stage_id'])) {
+            $normalized['funnel_stage_id'] = null;
+        }
+
+        return $normalized;
     }
 }

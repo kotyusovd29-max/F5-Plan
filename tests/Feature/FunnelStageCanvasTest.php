@@ -53,6 +53,6 @@ class FunnelStageCanvasTest extends TestCase
             ->withHeaders($headers)
             ->getJson(route('projects.funnels.canvas.refresh', [$project, $funnel]));
 
-        $refresh->assertOk()->assertJsonStructure(['html', 'title']);
+        $refresh->assertOk()->assertJsonStructure(['stages', 'title']);
     }
 }
