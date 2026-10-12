@@ -9,6 +9,7 @@ defineProps({
 });
 
 const links = [
+    { key: 'dashboard', href: '/admin/dashboard', label: 'Дашборд' },
     { key: 'users', href: '/admin/users', label: 'Пользователи' },
     { key: 'widgets', href: '/admin/widgets', label: 'Виджеты' },
     { key: 'starter-packages', href: '/admin/starter-packages', label: 'Стартовые пакеты' },

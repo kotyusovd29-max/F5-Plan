@@ -96,7 +96,7 @@ const {
 
                 <NavLink
                     v-if="user?.is_admin"
-                    href="/admin/users"
+                    href="/admin/dashboard"
                     label="Админ-панель"
                     :active="$page.url.startsWith('/admin')"
                 >

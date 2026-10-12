@@ -1,5 +1,6 @@
 <?php
 
+use App\Http\Controllers\Admin\DashboardController;
 use App\Http\Controllers\Admin\UserController;
 use App\Http\Controllers\Admin\WidgetController;
 use App\Http\Controllers\Admin\LibraryFunnelController;
@@ -163,6 +164,8 @@ Route::middleware('auth')->group(function () {
     Route::post('/google/disconnect', [GoogleAccountController::class, 'disconnect'])->name('google.disconnect');
 
     Route::middleware('admin')->prefix('admin')->name('admin.')->group(function () {
+        Route::get('/dashboard', [DashboardController::class, 'index'])->name('dashboard');
+        Route::post('/dashboard/refresh', [DashboardController::class, 'refresh'])->name('dashboard.refresh');
         Route::resource('users', UserController::class)->except(['show']);
         Route::resource('widgets', WidgetController::class)->except(['show']);
         Route::resource('starter-packages', StarterPackageController::class)
